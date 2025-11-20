@@ -20,6 +20,18 @@ const PresetButton = ({ label, seconds, onClick, active }) => (
   </button>
 );
 
+const Toggle = ({ checked, onChange, label }) => (
+  <label className="flex items-center gap-2 text-sm text-slate-300 select-none cursor-pointer">
+    <input
+      type="checkbox"
+      checked={checked}
+      onChange={(e) => onChange(e.target.checked)}
+      className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-blue-500"
+    />
+    <span>{label}</span>
+  </label>
+);
+
 const Timer = () => {
   const [duration, setDuration] = useState(60); // seconds
   const [remaining, setRemaining] = useState(duration * 1000);
@@ -30,8 +42,32 @@ const Timer = () => {
     'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?q=80&w=1200&auto=format&fit=crop',
   ]);
   const [currentIdx, setCurrentIdx] = useState(0);
+  const [autoNextOnStart, setAutoNextOnStart] = useState(true);
+  const [soundOnFinish, setSoundOnFinish] = useState(true);
+
   const intervalRef = useRef(null);
   const endTimeRef = useRef(null);
+  const wasNearEndRef = useRef(false);
+
+  // Audio: simple beep using WebAudio API
+  const beep = () => {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine';
+      o.frequency.value = 880; // A5
+      o.connect(g);
+      g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.25);
+      o.start();
+      o.stop(ctx.currentTime + 0.26);
+    } catch (e) {
+      // ignore
+    }
+  };
 
   useEffect(() => {
     setRemaining(duration * 1000);
@@ -47,6 +83,9 @@ const Timer = () => {
       if (left <= 0) {
         setRunning(false);
         clearInterval(intervalRef.current);
+        // Feedback on finish
+        if (soundOnFinish) beep();
+        if (navigator.vibrate) navigator.vibrate(120);
       }
     };
 
@@ -57,8 +96,32 @@ const Timer = () => {
     return () => clearInterval(intervalRef.current);
   }, [running]);
 
+  // Global hotkeys: E to toggle start/pause, R to reset
+  useEffect(() => {
+    const onKey = (e) => {
+      const tag = (e.target && e.target.tagName) || '';
+      const isTyping = ['INPUT', 'TEXTAREA'].includes(tag);
+      if (isTyping) return; // don't interfere when typing
+
+      if (e.key === 'e' || e.key === 'E') {
+        e.preventDefault();
+        running ? pause() : start();
+      }
+      if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        reset();
+      }
+    };
+
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [running, remaining, duration]);
+
   const start = () => {
     if (remaining <= 0) setRemaining(duration * 1000);
+    if (autoNextOnStart && images.length > 0) {
+      setCurrentIdx((i) => (i + 1) % images.length);
+    }
     setRunning(true);
   };
   const pause = () => setRunning(false);
@@ -84,14 +147,20 @@ const Timer = () => {
     setCurrentIdx((prev) => (prev > 0 ? prev - 1 : 0));
   };
 
+  const totalSeconds = Math.max(0, Math.floor(remaining / 1000));
+  const nearEnd = totalSeconds <= 5 && running;
+
   return (
     <section className="relative py-10 md:py-14">
       <div className="mx-auto max-w-5xl px-6">
         <div className="grid md:grid-cols-2 gap-8 items-stretch">
           {/* Left: Timer controls */}
           <div className="bg-slate-800/60 border border-slate-700 rounded-2xl p-6 md:p-8 shadow-xl">
-            <div className="flex items-center justify-between">
-              <h2 className="text-white text-xl font-semibold">Таймер</h2>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-white text-xl font-semibold">Таймер</h2>
+                <p className="text-xs text-slate-400 mt-1">Горячие клавиши: E — старт/пауза, R — сброс</p>
+              </div>
               <div className="flex gap-2">
                 <PresetButton label="15с" seconds={15} onClick={setPreset} active={duration===15} />
                 <PresetButton label="1м" seconds={60} onClick={setPreset} active={duration===60} />
@@ -100,7 +169,9 @@ const Timer = () => {
             </div>
 
             <div className="mt-6 text-center">
-              <div className="text-6xl md:text-7xl font-black tracking-tight text-white tabular-nums">
+              <div className={`text-6xl md:text-7xl font-black tracking-tight text-white tabular-nums transition-colors ${
+                nearEnd ? 'text-rose-300' : 'text-white'
+              } ${running ? 'animate-pulse [animation-duration:2s]' : ''}`}>
                 {formatTime(remaining)}
               </div>
               <p className="mt-2 text-slate-300 text-sm">Осталось времени</p>
@@ -109,29 +180,36 @@ const Timer = () => {
             <div className="mt-6 flex flex-wrap gap-3 justify-center">
               {!running ? (
                 <button onClick={start} className="px-4 py-2 rounded-xl bg-blue-500 hover:bg-blue-600 text-white font-medium shadow">
-                  Старт
+                  Старт (E)
                 </button>
               ) : (
                 <button onClick={pause} className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-medium shadow">
-                  Пауза
+                  Пауза (E)
                 </button>
               )}
               <button onClick={reset} className="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-medium">
-                Сброс
+                Сброс (R)
               </button>
             </div>
 
-            <div className="mt-6">
-              <label className="block text-sm text-slate-300 mb-2">Пользовательское время (секунды)</label>
-              <input
-                type="range"
-                min="5"
-                max="1200"
-                value={duration}
-                onChange={(e) => setPreset(Number(e.target.value))}
-                className="w-full"
-              />
-              <div className="text-xs text-slate-400 mt-1">{duration} сек.</div>
+            <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+              <div>
+                <label className="block text-sm text-slate-300 mb-2">Пользовательское время (секунды)</label>
+                <input
+                  type="range"
+                  min="5"
+                  max="1200"
+                  value={duration}
+                  onChange={(e) => setPreset(Number(e.target.value))}
+                  className="w-full"
+                />
+                <div className="text-xs text-slate-400 mt-1">{duration} сек.</div>
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <Toggle checked={autoNextOnStart} onChange={setAutoNextOnStart} label="Автосмена изображения при старте" />
+                <Toggle checked={soundOnFinish} onChange={setSoundOnFinish} label="Звук по окончании" />
+              </div>
             </div>
           </div>
 
@@ -144,7 +222,7 @@ const Timer = () => {
                 <img
                   src={images[currentIdx % images.length]}
                   alt="preview"
-                  className="w-full h-full object-cover"
+                  className={`w-full h-full object-cover transition-transform duration-300 ${running ? 'scale-[1.02]' : 'scale-100'}`}
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-slate-400">
